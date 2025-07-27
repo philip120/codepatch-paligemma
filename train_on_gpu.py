@@ -21,6 +21,7 @@ def get_args():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for fine-tuning.")
     parser.add_argument("--output_dir", type=str, default="codepatch_checkpoint", help="Directory to save model checkpoints.")
     parser.add_argument("--checkpoint_to_load", type=str, default=None, help="Path to a checkpoint to continue training from.")
+    parser.add_argument("--accumulation_steps", type=int, default=4, help="Number of steps to accumulate gradients over.")
     return parser.parse_args()
 
 def collate_fn(batch, processor, code_config):
@@ -104,9 +105,7 @@ def main():
         total_loss = 0
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
-        for batch in progress_bar:
-            optimizer.zero_grad()
-            
+        for i, batch in enumerate(progress_bar):
             # Move all tensors in the batch to the device
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop("labels")
@@ -114,14 +113,19 @@ def main():
             with autocast():
                 outputs = model(**batch)
                 logits = outputs["logits"]
-                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+                # Divide the loss by accumulation steps to average it out
+                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1)) / args.accumulation_steps
             
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
             
-            total_loss += loss.item()
-            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+            # Update weights only every accumulation_steps
+            if (i + 1) % args.accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+            
+            total_loss += loss.item() * args.accumulation_steps # Multiply back to get the true loss for logging
+            progress_bar.set_postfix({"loss": f"{loss.item() * args.accumulation_steps:.4f}"})
 
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch {epoch+1} completed. Average Loss: {avg_loss:.4f}")
