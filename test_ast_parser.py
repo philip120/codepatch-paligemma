@@ -17,10 +17,17 @@ def rebuild_node_to_text(node):
     if not isinstance(node, tuple):
         return str(node).strip("'")
     
-    # Handle leaf nodes that are tuples, e.g. ('A',)
+    # Handle leaf nodes that are tuples, e.g. ('A',) or ('plot',)
     if len(node) == 1 and isinstance(node[0], str):
         return node[0].strip("'")
 
+    # If a node is just a wrapper, e.g. ('expr', (('plot',))) go deeper
+    if len(node) == 2 and (node[0] in ['expr', 'statement', 'args']) and isinstance(node[1], tuple):
+        # Handle cases with multiple children like in args
+        if len(node[1]) > 1:
+             return rebuild_node_to_text(node[1])
+        return rebuild_node_to_text(node[1][0])
+        
     node_type, children = node
 
     # --- Handle specific node types for better reconstruction ---
@@ -29,33 +36,31 @@ def rebuild_node_to_text(node):
 
     if node_type == 'func_call/array_idxing':
         try:
-            # The 'expr' part can be complex (e.g., an assignment)
-            # We need to handle it carefully to get just the function name
             expr_node = children[0]
-            if expr_node[0] == 'expr' and expr_node[1][0][0] == 'assign':
-                 func_name = expr_node[1][0][1][1] # Dig deep for the name
-            else:
-                 func_name = rebuild_node_to_text(expr_node)
-            
             args_node = children[1]
+            
             rebuilt_args = [rebuild_node_to_text(arg) for arg in args_node[1]]
             args_string = ", ".join(rebuilt_args)
-            return f"{func_name}({args_string})"
+
+            # Check for the embedded assignment pattern: ('expr', (('assign', ...)))
+            if (isinstance(expr_node, tuple) and len(expr_node) > 1 and
+                isinstance(expr_node[1], tuple) and len(expr_node[1]) > 0 and
+                isinstance(expr_node[1][0], tuple) and expr_node[1][0][0] == 'assign'):
+                
+                assign_node = expr_node[1][0]
+                var_name = rebuild_node_to_text(assign_node[1][0])
+                func_name = rebuild_node_to_text(assign_node[1][1])
+                return f"{var_name} = {func_name}({args_string})"
+            else:
+                func_name = rebuild_node_to_text(expr_node)
+                return f"{func_name}({args_string})"
         except (ValueError, IndexError, TypeError):
-            return "[parse error: func_call]"
+             return "[parse error: func_call]"
 
     if node_type == 'assign':
         try:
             var_name = rebuild_node_to_text(children[0])
-            value_node = children[1]
-            
-            # Special case for function calls on the right side of assignment
-            if isinstance(value_node, tuple) and value_node[0] == 'func_call/array_idxing':
-                func_call_str = rebuild_node_to_text(value_node)
-                # The function name is already part of the rebuilt string
-                return f"{var_name} = {func_call_str}"
-
-            value = rebuild_node_to_text(value_node)
+            value = rebuild_node_to_text(children[1])
             return f"{var_name} = {value}"
         except (ValueError, IndexError):
             return "[parse error: assign]"
@@ -72,7 +77,6 @@ def rebuild_node_to_text(node):
 
     # --- Generic fallback for other node types ---
     if isinstance(children, tuple):
-        # Join children, but filter out None from failed rebuilds
         parts = [rebuild_node_to_text(child) for child in children]
         return "".join(p for p in parts if p)
     else:
