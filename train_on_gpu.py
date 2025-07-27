@@ -8,6 +8,9 @@ from tqdm import tqdm
 import argparse
 import os
 
+# We now need the real Gemma model from the transformers library
+from transformers import GemmaForCausalLM, GemmaConfig
+
 from modeling_codepatch import CodePatchConfig, CodeEncoderConfig, CodePatchForConditionalGeneration
 from processing_codepatch import CodePatchProcessor
 
@@ -15,8 +18,9 @@ def get_args():
     parser = argparse.ArgumentParser(description="Train a CodePatch model.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs.")
-    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate.")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for fine-tuning.")
     parser.add_argument("--output_dir", type=str, default="codepatch_checkpoint", help="Directory to save model checkpoints.")
+    parser.add_argument("--checkpoint_to_load", type=str, default=None, help="Path to a checkpoint to continue training from.")
     return parser.parse_args()
 
 def collate_fn(batch, processor, code_config):
@@ -46,30 +50,38 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    gemma_model_name = "google/gemma-2b"
+
     code_encoder_config = CodeEncoderConfig(freeze_encoder=True)
     processor = CodePatchProcessor(
-        "microsoft/codebert-base", "microsoft/codebert-base", code_encoder_config, device=device
+        "microsoft/codebert-base", gemma_model_name, code_encoder_config, device=device
     )
 
-    text_config_dict = {
-        "vocab_size": processor.text_tokenizer.vocab_size,
-        "hidden_size": 2048, # Matching a typical small LLM
-        "intermediate_size": 8192,
-        "num_hidden_layers": 12,
-        "num_attention_heads": 16,
-        "num_key_value_heads": 8,
-        "max_position_embeddings": 4096,
-    }
+    # Load the official Gemma config
+    text_config = GemmaConfig.from_pretrained(gemma_model_name)
 
     full_config = CodePatchConfig(
         code_encoder_config=vars(code_encoder_config),
-        text_config=text_config_dict,
-        projection_dim=text_config_dict["hidden_size"],
-        freeze_llm=True,
+        text_config=text_config.to_dict(), # Pass the config as a dictionary
+        projection_dim=text_config.hidden_size,
+        freeze_llm=True, # <-- Freeze the LLM and only train the projector/embeddings
     )
 
-    print("Instantiating model...")
+    print("Instantiating model and loading REAL Gemma weights...")
     model = CodePatchForConditionalGeneration(full_config).to(device)
+
+    # Load the pre-trained weights for the language model part
+    gemma_model = GemmaForCausalLM.from_pretrained(gemma_model_name, torch_dtype=torch.bfloat16)
+    model.language_model.load_state_dict(gemma_model.state_dict())
+    
+    # If a checkpoint is provided, load the trained projector and embedding weights
+    if args.checkpoint_to_load:
+        print(f"Loading projector/embedding weights from: {args.checkpoint_to_load}")
+        checkpoint = torch.load(args.checkpoint_to_load, map_location=device)
+        model.multi_modal_projector.load_state_dict(checkpoint['projector_state_dict'])
+        model.code_encoder.position_embedding.load_state_dict(checkpoint['pos_embedding_state_dict'])
+        print("Successfully loaded projector and embedding weights.")
+
     model.train()
 
     print("Loading dataset...")
