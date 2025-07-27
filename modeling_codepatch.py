@@ -134,7 +134,8 @@ class CodePatchForConditionalGeneration(nn.Module):
         causal_mask = torch.tril(torch.ones((seq_length, seq_length), dtype=torch.bool, device=padding_mask_2d.device))
         attention_mask_4d = causal_mask[None, None, :, :] & padding_mask_2d[:, None, None, :]
         final_attention_mask = torch.zeros_like(attention_mask_4d, dtype=inputs_embeds.dtype)
-        final_attention_mask.masked_fill_(~attention_mask_4d, torch.finfo(inputs_embeds.dtype).min)
+        # Ensure the mask is boolean before using it for filling
+        final_attention_mask.masked_fill_(~attention_mask_4d.to(torch.bool), torch.finfo(inputs_embeds.dtype).min)
 
         # 6. Create position_ids that correctly account for padding
         position_ids = (padding_mask_2d.cumsum(-1) - 1).masked_fill(padding_mask_2d == 0, 1)
