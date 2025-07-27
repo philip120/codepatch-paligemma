@@ -26,11 +26,13 @@ class CodePatchConfig:
         code_encoder_config: dict,
         text_config: dict,
         projection_dim: int,
+        freeze_llm: bool = True,
         **kwargs,
     ):
         self.code_encoder_config = CodeEncoderConfig(**code_encoder_config)
         self.text_config = GemmaConfig(**text_config)
         self.projection_dim = projection_dim
+        self.freeze_llm = freeze_llm
 
 
 class CodePatchModel(nn.Module):
@@ -92,6 +94,10 @@ class CodePatchForConditionalGeneration(nn.Module):
         self.multi_modal_projector = CodePatchMultiModalProjector(config)
         self.language_model = GemmaForCausalLM(config.text_config)
 
+        if self.config.freeze_llm:
+            for param in self.language_model.parameters():
+                param.requires_grad = False
+
     def get_input_embeddings(self, input_ids):
         return self.language_model.get_input_embeddings()(input_ids)
 
@@ -139,12 +145,18 @@ class CodePatchForConditionalGeneration(nn.Module):
             projected_code_features, prompt_embeds, prompt_attention_mask
         )
         
-        # 5. Feed the combined sequence to the language model
+        # 5. Create position_ids for the combined sequence
+        batch_size, seq_length = inputs_embeds.shape[:2]
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=inputs_embeds.device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+
+        # 6. Feed the combined sequence to the language model
         # Note: The underlying Gemma model will create its own causal attention mask.
         # We only provide the padding mask.
         outputs = self.language_model(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
+            position_ids=position_ids,
             kv_cache=kv_cache,
         )
 
