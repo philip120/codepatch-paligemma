@@ -1,0 +1,151 @@
+import torch
+from torch import nn
+from transformers import AutoModel
+
+from modeling_gemma import GemmaConfig, GemmaForCausalLM, KVCache
+
+class CodeEncoderConfig:
+    def __init__(
+        self,
+        model_name_or_path: str = "microsoft/codebert-base",
+        hidden_size: int = 768,
+        num_patches: int = 256,
+        patch_length: int = 20,
+        freeze_encoder: bool = True,
+    ):
+        self.model_name_or_path = model_name_or_path
+        self.hidden_size = hidden_size
+        self.num_patches = num_patches
+        self.patch_length = patch_length
+        self.freeze_encoder = freeze_encoder
+
+
+class CodePatchConfig:
+    def __init__(
+        self,
+        code_encoder_config: dict,
+        text_config: dict,
+        projection_dim: int,
+        **kwargs,
+    ):
+        self.code_encoder_config = CodeEncoderConfig(**code_encoder_config)
+        self.text_config = GemmaConfig(**text_config)
+        self.projection_dim = projection_dim
+
+
+class CodePatchModel(nn.Module):
+    def __init__(self, config: CodeEncoderConfig):
+        super().__init__()
+        self.config = config
+        self.encoder = AutoModel.from_pretrained(config.model_name_or_path)
+
+        # Add positional embeddings for the patches, similar to SigLIP's vision embeddings
+        self.position_embedding = nn.Embedding(config.num_patches, config.hidden_size)
+        self.register_buffer("position_ids", torch.arange(config.num_patches).expand((1, -1)), persistent=False)
+
+        if config.freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        batch_size, num_patches, patch_length = input_ids.shape
+        hidden_size = self.config.hidden_size
+
+        # Reshape from (batch_size, num_patches, patch_length) to (batch_size * num_patches, patch_length)
+        # to process all patches in a single batch.
+        input_ids = input_ids.view(-1, patch_length)
+        attention_mask = attention_mask.view(-1, patch_length)
+
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+
+        # Extract the [CLS] token's embedding for each patch.
+        # This serves as the summary vector for the patch.
+        patch_embeddings = outputs.last_hidden_state[:, 0, :]
+
+        # Reshape back to (batch_size, num_patches, hidden_size)
+        patch_embeddings = patch_embeddings.view(batch_size, num_patches, hidden_size)
+
+        # Add the learned positional embeddings to the patch embeddings
+        positional_embeddings = self.position_embedding(self.position_ids)
+        patch_embeddings = patch_embeddings + positional_embeddings
+
+        return patch_embeddings
+
+
+class CodePatchMultiModalProjector(nn.Module):
+    def __init__(self, config: CodePatchConfig):
+        super().__init__()
+        self.linear = nn.Linear(
+            config.code_encoder_config.hidden_size, config.projection_dim, bias=True
+        )
+
+    def forward(self, code_features: torch.Tensor) -> torch.Tensor:
+        projected_features = self.linear(code_features)
+        return projected_features
+
+
+class CodePatchForConditionalGeneration(nn.Module):
+    def __init__(self, config: CodePatchConfig):
+        super().__init__()
+        self.config = config
+        self.code_encoder = CodePatchModel(config.code_encoder_config)
+        self.multi_modal_projector = CodePatchMultiModalProjector(config)
+        self.language_model = GemmaForCausalLM(config.text_config)
+
+    def get_input_embeddings(self, input_ids):
+        return self.language_model.get_input_embeddings()(input_ids)
+
+    def _merge_inputs(
+        self,
+        code_features: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        
+        # Create an attention mask for the code features, which are always attended to.
+        code_attention_mask = torch.ones(
+            code_features.shape[:2], dtype=torch.long, device=code_features.device
+        )
+
+        # Concatenate the embeddings and the attention masks
+        combined_embeddings = torch.cat([code_features, prompt_embeds], dim=1)
+        combined_attention_mask = torch.cat(
+            [code_attention_mask, prompt_attention_mask], dim=1
+        )
+
+        return combined_embeddings, combined_attention_mask
+
+    def forward(
+        self,
+        code_input_ids: torch.Tensor,
+        code_attention_mask: torch.Tensor,
+        prompt_input_ids: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+        kv_cache: KVCache = None,
+    ):
+        # 1. Get embeddings for the code patches
+        code_features = self.code_encoder(
+            input_ids=code_input_ids, attention_mask=code_attention_mask
+        )
+
+        # 2. Project the code embeddings to match the language model's dimension
+        projected_code_features = self.multi_modal_projector(code_features)
+
+        # 3. Get embeddings for the text prompt
+        prompt_embeds = self.get_input_embeddings(prompt_input_ids)
+
+        # 4. Merge the code and text embeddings into a single sequence
+        inputs_embeds, attention_mask = self._merge_inputs(
+            projected_code_features, prompt_embeds, prompt_attention_mask
+        )
+        
+        # 5. Feed the combined sequence to the language model
+        # Note: The underlying Gemma model will create its own causal attention mask.
+        # We only provide the padding mask.
+        outputs = self.language_model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            kv_cache=kv_cache,
+        )
+
+        return outputs 
