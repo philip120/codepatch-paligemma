@@ -2,7 +2,7 @@ import torch
 from torch.optim import AdamW
 from torch import nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from datasets import load_dataset
 from tqdm import tqdm
 import argparse
@@ -98,7 +98,7 @@ def main():
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW(trainable_params, lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
 
     print("--- Starting Training ---")
     for epoch in range(args.epochs):
@@ -110,13 +110,14 @@ def main():
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop("labels")
 
-            with autocast():
+            with autocast(device_type="cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 logits = outputs["logits"]
                 # Divide the loss by accumulation steps to average it out
-                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1)) / args.accumulation_steps
+                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
             
-            scaler.scale(loss).backward()
+            scaled_loss = loss / args.accumulation_steps
+            scaler.scale(scaled_loss).backward()
             
             # Update weights only every accumulation_steps
             if (i + 1) % args.accumulation_steps == 0:
@@ -124,8 +125,8 @@ def main():
                 scaler.update()
                 optimizer.zero_grad()
             
-            total_loss += loss.item() * args.accumulation_steps # Multiply back to get the true loss for logging
-            progress_bar.set_postfix({"loss": f"{loss.item() * args.accumulation_steps:.4f}"})
+            total_loss += loss.item() # Log the true, undivided loss
+            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch {epoch+1} completed. Average Loss: {avg_loss:.4f}")
