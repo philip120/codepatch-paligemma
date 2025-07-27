@@ -101,26 +101,6 @@ class CodePatchForConditionalGeneration(nn.Module):
     def get_input_embeddings(self, input_ids):
         return self.language_model.get_input_embeddings()(input_ids)
 
-    def _merge_inputs(
-        self,
-        code_features: torch.Tensor,
-        prompt_embeds: torch.Tensor,
-        prompt_attention_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        
-        # Create an attention mask for the code features, which are always attended to.
-        code_attention_mask = torch.ones(
-            code_features.shape[:2], dtype=torch.long, device=code_features.device
-        )
-
-        # Concatenate the embeddings and the attention masks
-        combined_embeddings = torch.cat([code_features, prompt_embeds], dim=1)
-        combined_attention_mask = torch.cat(
-            [code_attention_mask, prompt_attention_mask], dim=1
-        )
-
-        return combined_embeddings, combined_attention_mask
-
     def forward(
         self,
         code_input_ids: torch.Tensor,
@@ -128,6 +108,7 @@ class CodePatchForConditionalGeneration(nn.Module):
         prompt_input_ids: torch.Tensor,
         prompt_attention_mask: torch.Tensor,
         kv_cache: KVCache = None,
+        **kwargs, # Accept and ignore the 'labels' from the collate_fn
     ):
         # 1. Get embeddings for the code patches
         code_features = self.code_encoder(
@@ -140,22 +121,28 @@ class CodePatchForConditionalGeneration(nn.Module):
         # 3. Get embeddings for the text prompt
         prompt_embeds = self.get_input_embeddings(prompt_input_ids)
 
-        # 4. Merge the code and text embeddings into a single sequence
-        inputs_embeds, attention_mask = self._merge_inputs(
-            projected_code_features, prompt_embeds, prompt_attention_mask
-        )
+        # 4. Merge features and create the correct 2D padding mask for the full sequence
+        inputs_embeds = torch.cat([projected_code_features, prompt_embeds], dim=1)
         
-        # 5. Create position_ids for the combined sequence
-        batch_size, seq_length = inputs_embeds.shape[:2]
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=inputs_embeds.device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+        code_padding_mask_2d = torch.ones(
+            projected_code_features.shape[:2], dtype=torch.long, device=projected_code_features.device
+        )
+        padding_mask_2d = torch.cat([code_padding_mask_2d, prompt_attention_mask], dim=1)
 
-        # 6. Feed the combined sequence to the language model
-        # Note: The underlying Gemma model will create its own causal attention mask.
-        # We only provide the padding mask.
+        # 5. Create a 4D causal attention mask from the 2D padding mask.
+        batch_size, seq_length = padding_mask_2d.shape
+        causal_mask = torch.tril(torch.ones((seq_length, seq_length), dtype=torch.bool, device=padding_mask_2d.device))
+        attention_mask_4d = causal_mask[None, None, :, :] & padding_mask_2d[:, None, None, :]
+        final_attention_mask = torch.zeros_like(attention_mask_4d, dtype=inputs_embeds.dtype)
+        final_attention_mask.masked_fill_(~attention_mask_4d, torch.finfo(inputs_embeds.dtype).min)
+
+        # 6. Create position_ids that correctly account for padding
+        position_ids = (padding_mask_2d.cumsum(-1) - 1).masked_fill(padding_mask_2d == 0, 1)
+
+        # 7. Feed the combined sequence to the language model
         outputs = self.language_model(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            attention_mask=final_attention_mask,
             position_ids=position_ids,
             kv_cache=kv_cache,
         )
