@@ -1,6 +1,8 @@
 from transformers import AutoTokenizer
 import torch
 from typing import List, Union
+import os
+import sys
 
 from modeling_codepatch import CodeEncoderConfig
 from ast_parser.matlab_parser import MatlabParser
@@ -14,8 +16,13 @@ class CodePatchProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_tokenizer_name)
         self.config = config
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Suppress the SLY parsing errors from filling up the console
         self.parser = MatlabParser()
+        self.parser.error_output = open(os.devnull, 'w')
+        
         self.lexer = MatlabLexer()
+        self.lexer.error_output = open(os.devnull, 'w')
 
     def _process_code(self, code_strings: List[str]):
         """ Processes a batch of code strings using AST-based semantic patching. """

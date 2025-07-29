@@ -7,6 +7,8 @@ from datasets import load_dataset
 from tqdm import tqdm
 import argparse
 import os
+import sys
+import matplotlib.pyplot as plt
 
 # We now need the real Gemma model from the transformers library
 from transformers import GemmaForCausalLM, GemmaConfig
@@ -18,7 +20,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Train a CodePatch model.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs.")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for fine-tuning.")
+    parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate for fine-tuning.")
     parser.add_argument("--output_dir", type=str, default="codepatch_checkpoint", help="Directory to save model checkpoints.")
     parser.add_argument("--checkpoint_to_load", type=str, default=None, help="Path to a checkpoint to continue training from.")
     parser.add_argument("--accumulation_steps", type=int, default=4, help="Number of steps to accumulate gradients over.")
@@ -47,6 +49,11 @@ def collate_fn(batch, processor, code_config):
 def main():
     args = get_args()
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # --- Redirect stdout and stderr to a log file ---
+    log_file_path = os.path.join(args.output_dir, "training_log.txt")
+    sys.stdout = open(log_file_path, 'w')
+    sys.stderr = sys.stdout
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -99,6 +106,8 @@ def main():
     optimizer = AdamW(trainable_params, lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
     scaler = GradScaler('cuda')
+    
+    epoch_losses = [] # To store average loss per epoch for plotting
 
     print("--- Starting Training ---")
     for epoch in range(args.epochs):
@@ -121,6 +130,11 @@ def main():
             
             # Update weights only every accumulation_steps
             if (i + 1) % args.accumulation_steps == 0:
+                # Unscale the gradients before clipping
+                scaler.unscale_(optimizer)
+                # Clip the gradients to prevent them from exploding
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -129,6 +143,7 @@ def main():
             progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         avg_loss = total_loss / len(train_loader)
+        epoch_losses.append(avg_loss)
         print(f"Epoch {epoch+1} completed. Average Loss: {avg_loss:.4f}")
         
         # Save the trainable parts of the model
@@ -140,6 +155,19 @@ def main():
         print(f"Model checkpoint saved to {checkpoint_path}")
 
     print("--- Training Complete ---")
+
+    # --- Plotting the training loss ---
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, args.epochs + 1), epoch_losses, marker='o', linestyle='-')
+    plt.title("Training Loss Over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Loss")
+    plt.grid(True)
+    plt.xticks(range(1, args.epochs + 1))
+    plot_path = os.path.join(args.output_dir, "training_loss_plot.png")
+    plt.savefig(plot_path)
+    print(f"Training loss plot saved to {plot_path}")
+
 
 if __name__ == "__main__":
     main() 

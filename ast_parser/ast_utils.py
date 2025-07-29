@@ -1,5 +1,21 @@
 from sly.lex import Lexer
 from sly.yacc import Parser
+import os
+import sys
+from contextlib import contextmanager
+
+
+@contextmanager
+def suppress_stderr():
+    """A context manager that temporarily suppresses stderr."""
+    new_stderr = open(os.devnull, 'w')
+    old_stderr = sys.stderr
+    try:
+        sys.stderr = new_stderr
+        yield
+    finally:
+        sys.stderr = old_stderr
+        new_stderr.close()
 
 
 def reconstruct_code_from_ast(node):
@@ -51,20 +67,38 @@ def reconstruct_code_from_ast(node):
 def get_semantic_patches(matlab_code: str, parser: Parser, lexer: Lexer) -> list[str]:
     """
     Parses MATLAB code and extracts a list of semantic statements from the AST.
+    Falls back to simple line/semicolon splitting if parsing fails.
     """
     if not matlab_code.strip():
         return []
 
-    # Parse the code to get the AST
-    ast = parser.parse(lexer.tokenize(matlab_code))
-    
-    patches = []
-    if ast and ast[0] == 'code_block':
-        statements = ast[1]
-        for stmt_node in statements:
-            # Reconstruct each statement and add it as a patch
-            reconstructed = reconstruct_code_from_ast(stmt_node)
-            if reconstructed:
-                patches.append(reconstructed.replace(" ;", ";")) # Clean up spacing before semicolon
-                
-    return patches 
+    try:
+        # Attempt to parse the code to get the AST, suppressing any stderr from sly
+        with suppress_stderr():
+            ast = parser.parse(lexer.tokenize(matlab_code))
+        
+        patches = []
+        if ast and ast[0] == 'code_block':
+            statements = ast[1]
+            for stmt_node in statements:
+                # Reconstruct each statement and add it as a patch
+                reconstructed = reconstruct_code_from_ast(stmt_node)
+                if reconstructed:
+                    patches.append(reconstructed.replace(" ;", ";"))
+        
+        # If parsing technically succeeds but yields no patches, it's still a failure case.
+        if not patches:
+            raise ValueError("AST parsing resulted in no patches.")
+
+        return patches
+        
+    except Exception:
+        # FALLBACK LOGIC: If AST parsing fails, split by newline and semicolon.
+        # This is more robust and ensures we always return some patches.
+        patches = [p.strip() for p in matlab_code.replace(';', '\n').split('\n') if p.strip()]
+        
+        # If splitting results in nothing, return the whole snippet as a single patch.
+        if not patches:
+            return [matlab_code]
+            
+        return patches 
