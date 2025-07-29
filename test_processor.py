@@ -21,7 +21,7 @@ def main():
     print("Processor instantiated successfully.")
 
     # --- 2. Load Data ---
-    matlab_file_path = "../example_matlab.m"
+    matlab_file_path = "test.m"
     print(f"\nLoading sample code from: {matlab_file_path}")
     with open(matlab_file_path, "r") as f:
         code_string = f.read()

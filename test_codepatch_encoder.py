@@ -1,53 +1,51 @@
 import torch
 from transformers import AutoTokenizer
+from typing import List
 
 from modeling_codepatch import CodePatchModel, CodeEncoderConfig
+from ast_parser.matlab_parser import MatlabParser
+from ast_parser.matlab_lexer import MatlabLexer
+from ast_parser.ast_utils import get_semantic_patches
 
 
-def process_code_for_encoder(code_string: str, tokenizer, config: CodeEncoderConfig, device: str):
+def process_code_for_encoder_ast(
+    semantic_patches: List[str], 
+    tokenizer, 
+    config: CodeEncoderConfig, 
+    device: str
+):
     """
-    Processes a raw code string into tokenized and patched tensors for the CodePatchModel.
+    Processes a list of semantic patches into tokenized and padded tensors.
     """
-    # Tokenize the entire code string
-    inputs = tokenizer(
-        code_string,
+    # Tokenize each patch individually
+    tokenized_patches = tokenizer(
+        semantic_patches,
         return_tensors="pt",
+        padding="max_length",
         truncation=True,
-        max_length=config.num_patches * config.patch_length, # Ensure we don't exceed max length
-    )
+        max_length=config.patch_length,
+    )["input_ids"]
 
-    input_ids = inputs["input_ids"].squeeze(0) # Remove batch dimension
-
-    # Calculate the number of full patches we can create
-    num_full_patches = len(input_ids) // config.patch_length
+    num_real_patches = len(tokenized_patches)
     
-    # Truncate to only include full patches
-    truncated_input_ids = input_ids[:num_full_patches * config.patch_length]
-
-    # Reshape into patches
-    patches = truncated_input_ids.view(num_full_patches, config.patch_length)
-
     # Pad patches if necessary to reach config.num_patches
-    num_padding_patches = config.num_patches - num_full_patches
+    num_padding_patches = config.num_patches - num_real_patches
     if num_padding_patches < 0:
-        # If we have more patches than configured, truncate them
-        patches = patches[:config.num_patches]
+        tokenized_patches = tokenized_patches[:config.num_patches]
         num_padding_patches = 0
+        num_real_patches = config.num_patches
 
-    padding = torch.zeros((num_padding_patches, config.patch_length), dtype=torch.long)
-    
-    # Combine patches and padding
-    final_patches = torch.cat((patches, padding), dim=0)
+    padding = torch.full((num_padding_patches, config.patch_length), tokenizer.pad_token_id, dtype=torch.long)
+    final_patches = torch.cat((tokenized_patches, padding), dim=0)
 
-    # Create a corresponding attention mask
-    # 1 for real tokens, 0 for padding
+    # Create attention mask
     attention_mask = (final_patches != tokenizer.pad_token_id).long()
     
     # Add a batch dimension and send to device
     final_patches = final_patches.unsqueeze(0).to(device)
     attention_mask = attention_mask.unsqueeze(0).to(device)
     
-    return final_patches, attention_mask, num_full_patches
+    return final_patches, attention_mask, num_real_patches
 
 
 def main():
@@ -64,15 +62,31 @@ def main():
     # Instantiate the CodePatchModel
     model = CodePatchModel(config).to(device).eval()
     print("CodePatchModel loaded successfully.")
+    
+    # Instantiate the MATLAB parser and lexer
+    parser = MatlabParser()
+    lexer = MatlabLexer()
 
     # --- 2. Load and Process Data ---
-    matlab_file_path = "../test.m"
+    matlab_file_path = "test.m"
     print(f"Loading MATLAB code from: {matlab_file_path}")
     with open(matlab_file_path, "r") as f:
         matlab_code = f.read()
 
-    print("Processing code into patches...")
-    input_patches, attention_mask, num_real_patches = process_code_for_encoder(matlab_code, tokenizer, config, device)
+    # Clean the code by replacing newlines with spaces for the parser
+    cleaned_code = matlab_code.replace('\\n', ' ').replace('\n', ' ')
+    
+    print("Generating semantic patches using AST...")
+    semantic_patches = get_semantic_patches(cleaned_code, parser, lexer)
+
+    print(f"Generated {len(semantic_patches)} semantic patches:")
+    for i, patch in enumerate(semantic_patches):
+        print(f"  Patch {i+1}: {patch}")
+
+    print("\nProcessing patches for the model...")
+    input_patches, attention_mask, num_real_patches = process_code_for_encoder_ast(
+        semantic_patches, tokenizer, config, device
+    )
 
     print(f"Shape of input patches tensor: {input_patches.shape}")
     print(f"Shape of attention mask tensor: {attention_mask.shape}")
@@ -90,8 +104,8 @@ def main():
     print("\n--- Summary vectors for each non-padding patch ---")
     for i in range(num_real_patches):
         patch_vector = output_vectors[0, i]
-        # Printing the first 16 dimensions for brevity
-        print(f"Patch {i+1:03d} summary vector (first 16 dims): {patch_vector[:16].tolist()}")
+        # Printing the first 8 dimensions for brevity
+        print(f"Patch {i+1:02d} summary vector (first 8 dims): {patch_vector[:8].tolist()}")
 
     if num_real_patches < config.num_patches:
         print(f"\nPatches {num_real_patches + 1} through {config.num_patches} are padding and were not shown.")

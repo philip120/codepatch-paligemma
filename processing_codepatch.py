@@ -3,6 +3,9 @@ import torch
 from typing import List, Union
 
 from modeling_codepatch import CodeEncoderConfig
+from ast_parser.matlab_parser import MatlabParser
+from ast_parser.matlab_lexer import MatlabLexer
+from ast_parser.ast_utils import get_semantic_patches
 
 
 class CodePatchProcessor:
@@ -11,30 +14,53 @@ class CodePatchProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_tokenizer_name)
         self.config = config
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.parser = MatlabParser()
+        self.lexer = MatlabLexer()
 
     def _process_code(self, code_strings: List[str]):
-        """ Processes a batch of code strings into tokenized and patched tensors. """
-        max_length = self.config.num_patches * self.config.patch_length
-        inputs = self.code_tokenizer(
-            code_strings,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=max_length,
-        )
-        
-        input_ids = inputs["input_ids"]
-        
-        # Reshape the tokenized inputs into patches
-        patched_input_ids = input_ids.view(
-            -1, self.config.num_patches, self.config.patch_length
-        )
-        
-        # The attention mask for the patches is simply whether the token is a pad token or not.
-        # We can create it directly from the patched input_ids.
-        attention_mask = (patched_input_ids != self.code_tokenizer.pad_token_id).long()
+        """ Processes a batch of code strings using AST-based semantic patching. """
+        all_patches_tensors = []
+        all_masks_tensors = []
 
-        return patched_input_ids.to(self.device), attention_mask.to(self.device)
+        for code_string in code_strings:
+            cleaned_code = code_string.replace('\\n', ' ').replace('\n', ' ')
+            semantic_patches = get_semantic_patches(cleaned_code, self.parser, self.lexer)
+
+            if not semantic_patches:
+                semantic_patches = [""]
+
+            inputs = self.code_tokenizer(
+                semantic_patches,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.config.patch_length,
+            )
+            
+            tokenized_patches = inputs["input_ids"]
+            
+            num_real_patches = tokenized_patches.shape[0]
+            num_padding_patches = self.config.num_patches - num_real_patches
+
+            if num_padding_patches > 0:
+                padding = torch.full(
+                    (num_padding_patches, self.config.patch_length), 
+                    self.code_tokenizer.pad_token_id, 
+                    dtype=torch.long
+                )
+                final_patches = torch.cat((tokenized_patches, padding), dim=0)
+            else:
+                final_patches = tokenized_patches[:self.config.num_patches]
+
+            attention_mask = (final_patches != self.code_tokenizer.pad_token_id).long()
+
+            all_patches_tensors.append(final_patches)
+            all_masks_tensors.append(attention_mask)
+        
+        batch_input_ids = torch.stack(all_patches_tensors).to(self.device)
+        batch_attention_mask = torch.stack(all_masks_tensors).to(self.device)
+
+        return batch_input_ids, batch_attention_mask
 
     def _process_text(self, text_prompts: List[str]):
         """ Processes a batch of text prompts into tokenized tensors. """
