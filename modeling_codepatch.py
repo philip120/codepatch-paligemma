@@ -108,7 +108,8 @@ class CodePatchForConditionalGeneration(nn.Module):
         prompt_input_ids: torch.Tensor,
         prompt_attention_mask: torch.Tensor,
         kv_cache: KVCache = None,
-        **kwargs, # Accept and ignore the 'labels' from the collate_fn
+        debug: bool = False,  # New flag for debugging input embeds
+        **kwargs,
     ):
         # 1. Get embeddings for the code patches
         code_features = self.code_encoder(
@@ -129,6 +130,25 @@ class CodePatchForConditionalGeneration(nn.Module):
 
         # 4. Merge features and create the correct 2D padding mask for the full sequence
         inputs_embeds = torch.cat([projected_code_features, prompt_embeds], dim=1)
+        
+        if debug:
+            print("\n--- Debug: Input to Gemma (inputs_embeds) ---")
+            batch_size, seq_len, hidden_size = inputs_embeds.shape
+            num_patches = projected_code_features.shape[1]
+            num_prompt_tokens = prompt_embeds.shape[1]
+            print(f"Total Sequence Length: {seq_len} (Patches: {num_patches}, Prompt Tokens: {num_prompt_tokens})")
+            print(f"Number of Valid Patches: {valid_patch_mask.sum().item()}")
+            print("Per-Position Vector Summary (First Batch Item):")
+            for pos in range(seq_len):
+                vec = inputs_embeds[0, pos]  # Vector for this position
+                norm = vec.norm().item()  # L2 norm to check if non-zero
+                first_few = vec[:5].tolist()  # First 5 elements for preview
+                if pos < num_patches:
+                    typ = "Patch" if valid_patch_mask[0, pos] else "Padded Patch"
+                else:
+                    typ = "Prompt Token"
+                print(f"Position {pos}: Type={typ}, Norm={norm:.4f}, First 5 Elements={first_few}")
+            print("--- End Debug ---")
         
         code_padding_mask_2d = valid_patch_mask.long()  # Use the valid mask for code part
         padding_mask_2d = torch.cat([code_padding_mask_2d, prompt_attention_mask], dim=1)

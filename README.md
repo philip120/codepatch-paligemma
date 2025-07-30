@@ -58,3 +58,42 @@ The end-to-end data flow for training is as follows:
 4.  These "code-word" embeddings are prepended to the text prompt embeddings and fed into the frozen **Gemma LLM**.
 5.  The LLM generates a textual description, and the loss is calculated.
 6.  Critically, backpropagation **only** updates the weights of the Multi-Modal Projector and the patch position embeddings, leaving the expert CodeBERT and Gemma models untouched. 
+
+## Intuition
+
+The core intuition behind CodePatch is to repurpose a proven vision-language architecture (inspired by PaliGemma) for a code-language task. Just as image patches capture visual semantics that a language model can 'understand' to generate descriptions, we treat snippets of code as 'patches' that capture programmatic semantics. By feeding these through a code-specific encoder (CodeBERT) and projecting them into the language model's (Gemma) embedding space, the model learns to 'see' what the code does—e.g., generating a plot—without ever viewing the actual visual output.
+
+This approach leverages frozen pre-trained experts:
+- **CodeBERT** summarizes code into meaningful vectors, preserving syntax and semantics.
+- **Gemma** generates fluent text conditioned on these vectors.
+Only a lightweight projector and position embeddings are trained, making it efficient and preventing disruption to the experts' knowledge. The result: A model that can describe plots (e.g., shape, min/max, features) directly from MATLAB code, useful for code review, documentation, or accessibility tools.
+
+## Training Logic
+
+Training is implemented in `train_on_gpu.py` and focuses on fine-tuning the projector and position embeddings while keeping CodeBERT and Gemma frozen. Here's a step-by-step overview:
+
+### 1. Setup and Configuration
+- **Hyperparameters**: Configurable via CLI args (e.g., `--batch_size 8`, `--epochs 10`, `--lr 2e-5`, `--accumulation_steps 4`).
+- **Model Instantiation**: Recreates the CodePatch model with frozen components and loads pre-trained Gemma weights.
+- **Optimizer and Scaler**: Uses AdamW on trainable params (projector/embeddings) with AMP (autocast) for mixed-precision training on GPU.
+- **Dataset**: Loads 'philip120/RPOFES-dataset' (train split), assuming pairs of MATLAB code and plot descriptions.
+
+### 2. Data Loading and Processing
+- **DataLoader**: Shuffles and batches the dataset.
+- **Collate Function**: For each batch:
+  - Processes code into semantic patches via AST parser.
+  - Tokenizes patches (CodeBERT) and prompts (Gemma tokenizer).
+  - Creates labels by ignoring patch positions (-100) and using prompt tokens for causal LM.
+
+### 3. Training Loop
+- **Per Epoch**: Iterate over batches with tqdm progress bar.
+- **Forward Pass**: Feed inputs to model; get logits.
+- **Loss Computation**: Shift logits/labels for causal LM (predict next token), compute cross-entropy, scale by accumulation steps.
+- **Backward and Update**: Accumulate gradients, clip norms, step optimizer every `accumulation_steps`.
+- **Logging**: Track per-batch loss; compute average per epoch.
+
+### 4. Saving and Monitoring
+- **Checkpoints**: Save projector and position embedding states after each epoch.
+- **Loss Plot**: Generate and save a matplotlib plot of average loss over epochs for visualization.
+
+This setup ensures efficient training, with loss typically decreasing steadily (e.g., from ~15 to ~2 over 10 epochs on a small dataset). For best results, monitor for overfitting and adjust epochs/LR based on validation if added. 
