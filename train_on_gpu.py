@@ -122,8 +122,11 @@ def main():
             with autocast(device_type="cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 logits = outputs["logits"]
+                # Shift logits and labels for causal LM loss
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = labels[:, 1:].contiguous()
                 # Divide the loss by accumulation steps to average it out
-                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+                loss = loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             
             scaled_loss = loss / args.accumulation_steps
             scaler.scale(scaled_loss).backward()

@@ -9,7 +9,7 @@ class CodeEncoderConfig:
         self,
         model_name_or_path: str = "microsoft/codebert-base",
         hidden_size: int = 768,
-        num_patches: int = 256,
+        num_patches: int = 64,
         patch_length: int = 20,
         freeze_encoder: bool = True,
     ):
@@ -115,6 +115,12 @@ class CodePatchForConditionalGeneration(nn.Module):
             input_ids=code_input_ids, attention_mask=code_attention_mask
         )
 
+        # Compute valid mask for patches (non-padded patches)
+        valid_patch_mask = code_attention_mask.any(dim=-1)  # (batch_size, num_patches), bool
+
+        # Mask out invalid patch features to zero
+        code_features = code_features * valid_patch_mask.unsqueeze(-1).to(code_features.dtype)
+
         # 2. Project the code embeddings to match the language model's dimension
         projected_code_features = self.multi_modal_projector(code_features)
 
@@ -124,9 +130,7 @@ class CodePatchForConditionalGeneration(nn.Module):
         # 4. Merge features and create the correct 2D padding mask for the full sequence
         inputs_embeds = torch.cat([projected_code_features, prompt_embeds], dim=1)
         
-        code_padding_mask_2d = torch.ones(
-            projected_code_features.shape[:2], dtype=torch.long, device=projected_code_features.device
-        )
+        code_padding_mask_2d = valid_patch_mask.long()  # Use the valid mask for code part
         padding_mask_2d = torch.cat([code_padding_mask_2d, prompt_attention_mask], dim=1)
 
         # 5. Create a 4D causal attention mask from the 2D padding mask.

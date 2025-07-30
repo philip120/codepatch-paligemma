@@ -19,10 +19,10 @@ class CodePatchProcessor:
         
         # Suppress the SLY parsing errors from filling up the console
         self.parser = MatlabParser()
-        self.parser.error_output = open(os.devnull, 'w')
+        # self.parser.error_output = open(os.devnull, 'w')  # Temporarily disabled for debugging
         
         self.lexer = MatlabLexer()
-        self.lexer.error_output = open(os.devnull, 'w')
+        # self.lexer.error_output = open(os.devnull, 'w')  # Temporarily disabled for debugging
 
     def _process_code(self, code_strings: List[str]):
         """ Processes a batch of code strings using AST-based semantic patching. """
@@ -32,6 +32,8 @@ class CodePatchProcessor:
         for code_string in code_strings:
             cleaned_code = code_string.replace('\\n', ' ').replace('\n', ' ')
             semantic_patches = get_semantic_patches(cleaned_code, self.parser, self.lexer)
+
+            print(f"Num semantic patches: {len(semantic_patches)}")  # Debug print
 
             if not semantic_patches:
                 semantic_patches = [""]
