@@ -58,6 +58,11 @@ def main():
     gemma_config_obj = GemmaConfig.from_pretrained(gemma_model_name)
     text_config = PeftCompatibleGemmaConfig(**gemma_config_obj.to_dict())
     
+    # --- We'll need these config values for the KV cache calculation ---
+    num_layers = text_config.num_hidden_layers
+    hidden_size = text_config.hidden_size
+    bytes_per_param = 2 # for bfloat16
+
     full_config = CodePatchConfig(
         code_encoder_config=vars(code_encoder_config), text_config=text_config, # Pass object directly
         projection_dim=text_config.hidden_size, freeze_llm=True,
@@ -109,6 +114,11 @@ def main():
         prompt_tokens = original_inputs['prompt_input_ids'].shape[1]
         total_input_tokens = num_patches + prompt_tokens
         initial_kv_cache_tokens = prompt_tokens
+
+        # --- Calculate actual KV cache size ---
+        # For CodePatch, only the text prompt fills the KV cache initially.
+        kv_cache_size_bytes = 2 * num_layers * hidden_size * initial_kv_cache_tokens * bytes_per_param
+        kv_cache_size_mb = round(kv_cache_size_bytes / (1024**2), 2)
 
         inputs = {k: v.clone() for k, v in original_inputs.items()}
         
@@ -175,6 +185,7 @@ def main():
                 "input_prompt_tokens": prompt_tokens,
                 "total_input_constructs": total_input_tokens,
                 "initial_kv_cache_tokens": initial_kv_cache_tokens,
+                "kv_cache_size_mb": kv_cache_size_mb,
                 "rouge1": scores['rouge1'].fmeasure,
                 "rouge2": scores['rouge2'].fmeasure,
                 "rougeL": scores['rougeL'].fmeasure

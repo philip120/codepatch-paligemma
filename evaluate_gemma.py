@@ -27,6 +27,13 @@ def main():
     print("Instantiating model and tokenizer...")
     model = GemmaForCausalLM.from_pretrained(gemma_model_name, torch_dtype=torch.bfloat16).to(device)
     tokenizer = AutoTokenizer.from_pretrained(gemma_model_name)
+    
+    # --- Get config values for KV cache calculation ---
+    config = model.config
+    num_layers = config.num_hidden_layers
+    hidden_size = config.hidden_size
+    bytes_per_param = 2 # for bfloat16
+
     model.eval()
     print("Model and tokenizer loaded successfully.")
 
@@ -51,6 +58,9 @@ def main():
         # --- KV Cache Calculation ---
         # For the standard Gemma model, the entire input (code + prompt) contributes to the KV cache.
         initial_kv_cache_tokens = prompt_tokens
+        
+        kv_cache_size_bytes = 2 * num_layers * hidden_size * initial_kv_cache_tokens * bytes_per_param
+        kv_cache_size_mb = round(kv_cache_size_bytes / (1024**2), 2)
 
         # --- 4. Generate Text ---
         with torch.no_grad():
@@ -75,6 +85,7 @@ def main():
                 "input_prompt_tokens": prompt_tokens,
                 "total_input_constructs": total_input_tokens,
                 "initial_kv_cache_tokens": initial_kv_cache_tokens,
+                "kv_cache_size_mb": kv_cache_size_mb,
                 "rouge1": scores['rouge1'].fmeasure,
                 "rouge2": scores['rouge2'].fmeasure,
                 "rougeL": scores['rougeL'].fmeasure
