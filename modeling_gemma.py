@@ -349,15 +349,19 @@ class GemmaModel(nn.Module):
     def get_input_embeddings(self):
         return self.embed_tokens
 
-    # Ignore copy
     def forward(
         self,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        kv_cache: Optional[KVCache] = None,
-    ) -> torch.FloatTensor:
-        # [Batch_Size, Seq_Len, Hidden_Size]
+        input_ids: torch.Tensor = None, # Make optional
+        attention_mask: torch.Tensor = None, # Make optional
+        position_ids: torch.Tensor = None, # Make optional
+        kv_cache: KVCache = None,
+        inputs_embeds: torch.Tensor = None, # Add inputs_embeds
+    ) -> torch.Tensor:
+        if inputs_embeds is None:
+            if input_ids is None:
+                raise ValueError("Either `input_ids` or `inputs_embeds` must be provided.")
+            inputs_embeds = self.embed_tokens(input_ids)
+        
         hidden_states = inputs_embeds
         # [Batch_Size, Seq_Len, Hidden_Size]
         normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
@@ -393,36 +397,24 @@ class GemmaForCausalLM(nn.Module):
     def tie_weights(self):
         self.lm_head.weight = self.model.embed_tokens.weight
 
-    def forward(
-        self,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        kv_cache: Optional[KVCache] = None,
-    ) -> Tuple:
+    def forward(self,
+                input_ids: torch.Tensor = None, # Make optional
+                attention_mask: torch.Tensor = None, # Make optional
+                position_ids: torch.Tensor = None, # Make optional
+                kv_cache: KVCache = None,
+                inputs_embeds: torch.Tensor = None, # Add inputs_embeds
+                **kwargs):
+        
+        if inputs_embeds is not None and input_ids is not None:
+            raise ValueError("You cannot specify both `input_ids` and `inputs_embeds` at the same time")
 
-        # input_embeds: [Batch_Size, Seq_Len, Hidden_Size]
-        # outputs: [Batch_Size, Seq_Len, Hidden_Size]
-        outputs = self.model(
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            inputs_embeds=inputs_embeds,
-            kv_cache=kv_cache,
-        )
-
-        hidden_states = outputs
+        hidden_states = self.model(input_ids=input_ids,
+                                   attention_mask=attention_mask,
+                                   position_ids=position_ids,
+                                   kv_cache=kv_cache,
+                                   inputs_embeds=inputs_embeds) # Pass inputs_embeds down
         logits = self.lm_head(hidden_states)
-        logits = logits.float()
-
-        return_data = {
-            "logits": logits,
-        }
-
-        if kv_cache is not None:
-            # Return the updated cache
-            return_data["kv_cache"] = kv_cache
-
-        return return_data
+        return {"logits": logits, "kv_cache": kv_cache}
 
 class PaliGemmaMultiModalProjector(nn.Module):
     def __init__(self, config: PaliGemmaConfig):

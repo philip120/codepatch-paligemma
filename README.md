@@ -6,7 +6,7 @@ This document outlines the architecture of our novel "CodePatch" model, a multim
 
 Our work stands on the shoulders of giants. This project would not be possible without leveraging these fantastic open-source repositories:
 
--   **Base PaliGemma Architecture**: The overall structure of our model, including the implementation of the Gemma language model and the multi-modal projector, is based on the work in Hari P. Paudel's `hkproj/pytorch-paligemma` repository.
+-   **Base PaliGemma Architecture**: The overall structure of our model, including the implementation of the Gemma language model and the multi-modal projector, is based on the work in `hkproj/pytorch-paligemma` repository.
     -   **Source**: [https://github.com/hkproj/pytorch-paligemma](https://github.com/hkproj/pytorch-paligemma)
 
 -   **MATLAB AST Parser**: For our advanced semantic patching strategy, we use the pure Python MATLAB parser created by `jol-jol`. This was a critical component for moving beyond simple token chunking.
@@ -68,32 +68,45 @@ This approach leverages frozen pre-trained experts:
 - **Gemma** generates fluent text conditioned on these vectors.
 Only a lightweight projector and position embeddings are trained, making it efficient and preventing disruption to the experts' knowledge. The result: A model that can describe plots (e.g., shape, min/max, features) directly from MATLAB code, useful for code review, documentation, or accessibility tools.
 
-## Training Logic
+## Training Methodology: An Evolutionary Approach
 
-Training is implemented in `train_on_gpu.py` and focuses on fine-tuning the projector and position embeddings while keeping CodeBERT and Gemma frozen. Here's a step-by-step overview:
+Finding the optimal training strategy was an iterative and insightful process. Our final, robust methodology is implemented in `train_on_gpu.py`. Here is the evolution of our approach, which led to the final, successful model.
 
-### 1. Setup and Configuration
-- **Hyperparameters**: Configurable via CLI args (e.g., `--batch_size 8`, `--epochs 10`, `--lr 2e-5`, `--accumulation_steps 4`).
-- **Model Instantiation**: Recreates the CodePatch model with frozen components and loads pre-trained Gemma weights.
-- **Optimizer and Scaler**: Uses AdamW on trainable params (projector/embeddings) with AMP (autocast) for mixed-precision training on GPU.
-- **Dataset**: Loads 'philip120/RPOFES-dataset' (train split), assuming pairs of MATLAB code and plot descriptions.
+### Phase 1: Baseline - Projector-Only Training
 
-### 2. Data Loading and Processing
-- **DataLoader**: Shuffles and batches the dataset.
-- **Collate Function**: For each batch:
-  - Processes code into semantic patches via AST parser.
-  - Tokenizes patches (CodeBERT) and prompts (Gemma tokenizer).
-  - Creates labels by ignoring patch positions (-100) and using prompt tokens for causal LM.
+Our initial approach was the simplest and most direct: freeze both the `CodeBERT` encoder and the `Gemma` LLM, and train only the multi-modal projector and the position embeddings.
 
-### 3. Training Loop
-- **Per Epoch**: Iterate over batches with tqdm progress bar.
-- **Forward Pass**: Feed inputs to model; get logits.
-- **Loss Computation**: Shift logits/labels for causal LM (predict next token), compute cross-entropy, scale by accumulation steps.
-- **Backward and Update**: Accumulate gradients, clip norms, step optimizer every `accumulation_steps`.
-- **Logging**: Track per-batch loss; compute average per epoch.
+-   **Rationale**: This is a very efficient way to establish a baseline. The goal is to see how well the model can perform by simply learning to "translate" the existing, generic `CodeBERT` embeddings into a format `Gemma` can understand.
+-   **Outcome**: This method was stable but performance was limited. The validation loss plateaued at a relatively high value (around **~3.5**), and the generated descriptions were often generic and lacked detail.
 
-### 4. Saving and Monitoring
-- **Checkpoints**: Save projector and position embedding states after each epoch.
-- **Loss Plot**: Generate and save a matplotlib plot of average loss over epochs for visualization.
+### Phase 2: Improving Code Understanding - Fine-Tuning the Encoder
 
-This setup ensures efficient training, with loss typically decreasing steadily (e.g., from ~15 to ~2 over 10 epochs on a small dataset). For best results, monitor for overfitting and adjust epochs/LR based on validation if added. 
+The logical next step was to improve the quality of the code representations themselves. We unfroze the `CodeBERT` encoder and trained it alongside the projector.
+
+-   **Rationale**: By fine-tuning the code encoder, we allow it to learn task-specific embeddings. Instead of generic code vectors, it learns to produce vectors that are specifically optimized to be understood by `Gemma` for the purpose of describing plots.
+-   **Outcome**: This led to a significant and steady improvement. The validation loss consistently decreased to **~3.25**, proving that tailoring the code embeddings to the task was a crucial step.
+
+### Phase 3: The Instability of Full Fine-Tuning
+
+The most powerful approach is to fine-tune the `Gemma` LLM itself. Our first attempt was to unfreeze the entire model and train it directly.
+
+-   **Rationale**: Allowing the LLM to adapt its weights should, in theory, yield the highest possible performance.
+-   **Outcome**: This resulted in a catastrophic failure. While the *training loss* plummeted, the model experienced **mode collapse**. It began producing incoherent, multilingual garbage, completely forgetting its ability to generate sensible text. This highlighted the extreme instability and danger of direct full fine-tuning on a specialized dataset.
+
+### Phase 4: The Solution - Stable Fine-Tuning with PEFT/LoRA
+
+To overcome the instability of full fine-tuning, we adopted a state-of-the-art technique: **Parameter-Efficient Fine-Tuning (PEFT)**, specifically using **Low-Rank Adaptation (LoRA)**.
+
+-   **Rationale**: LoRA is designed to adapt large models without the risk of catastrophic forgetting. Instead of modifying all 2+ billion of Gemma's weights, we keep the original model frozen and inject tiny, trainable "adapter" layers into its architecture. We only train these adapters (in our case, only **0.03%** of the total parameters).
+-   **Benefits**:
+    -   **Stability**: The core language capabilities of Gemma are preserved.
+    -   **Efficiency**: Training is significantly faster and requires much less VRAM.
+-   **Outcome**: This was the breakthrough. The LoRA-based fine-tuning was completely stable and highly effective, allowing the validation loss to drop to its lowest point yet (**~2.4**). This produced a model that generates relevant, coherent, and mostly accurate descriptions, successfully achieving the project's goal.
+
+### The Critical Role of Validation and Early Stopping
+
+Throughout all phases, a proper validation workflow was essential to navigate these challenges.
+
+-   **Train/Validation Split**: We used a 90/10 split of the dataset. The model trains on 90% and is tested against the unseen 10% after each epoch.
+-   **Monitoring Validation Loss**: We learned that a low *training loss* can be misleading (as seen in Phase 3). The **validation loss** is the true indicator of a model's ability to generalize.
+-   **Early Stopping**: The script was configured to save a checkpoint *only* when the validation loss improved. This ensures that the final saved model (`best_model_checkpoint.pt`) represents the model at its peak performance, not at its most overfitted state. 

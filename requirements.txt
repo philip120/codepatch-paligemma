@@ -7,3 +7,6 @@ datasets
 tqdm
 accelerate
 matplotlib
+rouge-score
+langdetect
+peft

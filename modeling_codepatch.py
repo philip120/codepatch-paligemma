@@ -9,7 +9,7 @@ class CodeEncoderConfig:
         self,
         model_name_or_path: str = "microsoft/codebert-base",
         hidden_size: int = 768,
-        num_patches: int = 64,
+        num_patches: int = 32,
         patch_length: int = 20,
         freeze_encoder: bool = True,
     ):
@@ -24,13 +24,13 @@ class CodePatchConfig:
     def __init__(
         self,
         code_encoder_config: dict,
-        text_config: dict,
+        text_config: object, # Accept a config object directly
         projection_dim: int,
         freeze_llm: bool = True,
         **kwargs,
     ):
         self.code_encoder_config = CodeEncoderConfig(**code_encoder_config)
-        self.text_config = GemmaConfig(**text_config)
+        self.text_config = text_config # Store the object directly
         self.projection_dim = projection_dim
         self.freeze_llm = freeze_llm
 
