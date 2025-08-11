@@ -1,0 +1,42 @@
+[
+    {
+        "code": "t = 0:0.01:10;\ny = sin(2*pi*0.5*t);\nfigure;\nplot(t, y);\ntitle('Sine Wave');\nxlabel('Time (s)');\nylabel('Amplitude');\ngrid on;",
+        "description": "[plot shape: Sinusoidal, maximum: 1, minimum: -1, pivot points: (0,0) (2,0) (4,0) etc., direction: Oscillating, x-intercepts: every 2s, y-intercepts: 0, final value: ~0, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Periodic with frequency 0.5 Hz.]"
+    },
+    {
+        "code": "x = -5:0.1:5;\ny = x.^2;\nfigure;\nplot(x, y);\ntitle('Parabola');\nxlabel('x');\nylabel('y');\ngrid on;",
+        "description": "[plot shape: Parabolic, maximum: N/A (unbounded), minimum: 0, pivot points: (0,0), direction: Ascending on both sides, x-intercepts: 0, y-intercepts: 0, final value: 25 at x=5, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Symmetric about y-axis.]"
+    },
+    {
+        "code": "t = 0:0.01:5;\ny = exp(-t);\nfigure;\nplot(t, y);\ntitle('Exponential Decay');\nxlabel('Time (s)');\nylabel('Value');\ngrid on;",
+        "description": "[plot shape: Exponential decay, maximum: 1, minimum: ~0, pivot points: (0,1), direction: Descending, x-intercepts: N/A, y-intercepts: 1, final value: ~0.0067, overshoot: 0, rise time: N/A, settling time: ~4s to 0.01, other notable features: Asymptotic to 0.]"
+    },
+    {
+        "code": "x = linspace(0,10,100);\ny = 2*x + 3;\nfigure;\nplot(x, y);\ntitle('Linear Function');\nxlabel('x');\nylabel('y');\ngrid on;",
+        "description": "[plot shape: Straight line, maximum: 23 at x=10, minimum: 3 at x=0, pivot points: N/A, direction: Ascending, x-intercepts: -1.5 (extrapolated), y-intercepts: 3, final value: 23, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Slope of 2.]"
+    },
+    {
+        "code": "t = 0:0.01:2*pi;\ny = cos(t);\nfigure;\nplot(t, y);\ntitle('Cosine Wave');\nxlabel('Time (rad)');\nylabel('Amplitude');\ngrid on;",
+        "description": "[plot shape: Sinusoidal (cosine), maximum: 1, minimum: -1, pivot points: (0,1) (pi, -1) etc., direction: Oscillating, x-intercepts: pi/2 3pi/2 etc., y-intercepts: 1, final value: 1, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Period 2pi, phase shift from sine.]"
+    },
+    {
+        "code": "x = -10:0.1:10;\ny = tanh(x);\nfigure;\nplot(x, y);\ntitle('Hyperbolic Tangent');\nxlabel('x');\nylabel('y');\ngrid on;",
+        "description": "[plot shape: Sigmoid-like, maximum: 1, minimum: -1, pivot points: (0,0), direction: Ascending, x-intercepts: 0, y-intercepts: 0, final value: ~1, overshoot: 0, rise time: ~4 units, settling time: ~10 units, other notable features: Asymptotic to ±1.]"
+    },
+    {
+        "code": "t = 0:0.1:10;\ny = t.^0.5;\nfigure;\nplot(t, y);\ntitle('Square Root Curve');\nxlabel('t');\nylabel('y');\ngrid on;",
+        "description": "[plot shape: Concave down curve, maximum: ~3.16 at t=10, minimum: 0, pivot points: (0,0), direction: Ascending, x-intercepts: 0, y-intercepts: 0, final value: ~3.16, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Increasing but decelerating.]"
+    },
+    {
+        "code": "x = 1:100;\ny = log(x);\nfigure;\nplot(x, y);\ntitle('Natural Logarithm');\nxlabel('x');\nylabel('y');\ngrid on;",
+        "description": "[plot shape: Logarithmic, maximum: ~4.61 at x=100, minimum: 0 at x=1, pivot points: N/A, direction: Ascending, x-intercepts: N/A, y-intercepts: N/A, final value: ~4.61, overshoot: N/A, rise time: N/A, settling time: N/A, other notable features: Concave down, approaches -inf as x->0.]"
+    },
+    {
+        "code": "t = 0:0.01:1;\ny = square(2*pi*t);\nfigure;\nplot(t, y);\ntitle('Square Wave');\nxlabel('Time');\nylabel('Amplitude');\ngrid on;",
+        "description": "[plot shape: Square wave, maximum: 1, minimum: -1, pivot points: (0,1) (0.5,-1) etc., direction: Oscillating abruptly, x-intercepts: 0.25 0.75 etc., y-intercepts: 1, final value: -1, overshoot: N/A, rise time: Instant, settling time: Instant, other notable features: Period 1, duty cycle 50%.]"
+    },
+    {
+        "code": "A = -2; B = 1; C = 1; D = 0; sys = ss(A, B, C, D); t = 0:0.01:5; u = ones(size(t)); y = lsim(sys, u, t); figure; plot(t, y); title('Step Response of First-Order System'); xlabel('Time (s)'); ylabel('Output'); grid on;",
+        "description": "[plot shape: Exponential rise, maximum: 1, minimum: 0, pivot points: (0,0), direction: Ascending, x-intercepts: N/A, y-intercepts: 0, final value: 1, overshoot: 0, rise time: ~0.5s, settling time: ~2s, other notable features: Smooth curve approaching 1 asymptotically.]"
+    }
+]
