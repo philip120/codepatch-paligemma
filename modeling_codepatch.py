@@ -9,7 +9,7 @@ class CodeEncoderConfig:
         self,
         model_name_or_path: str = "microsoft/codebert-base",
         hidden_size: int = 768,
-        num_patches: int = 32,
+        num_patches: int = 64,
         patch_length: int = 20,
         freeze_encoder: bool = True,
     ):
